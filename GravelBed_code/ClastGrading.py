@@ -1,0 +1,239 @@
+
+import numpy as np
+from landlab import Component
+import scipy.stats as stats
+import time
+from landlab.grid.nodestatus import NodeStatus
+
+
+class ClastGrading(Component):
+
+    _name = 'ClastGrading'
+    _unit_agnostic = True
+    _info = {
+        "soil__depth":{
+          "dtype":float,
+          "intent":"out",
+          "optional":False,
+          "units": "m",
+          "mapping":"node",
+          "doc":"Soil depth at node",
+      },
+        "grain__weight": {
+            "dtype": float,
+            "intent": "out",
+            "optional": False,
+            "units": "kg",
+            "mapping": "node",
+            "doc": "Sediment weight for all size fractions",
+        },
+        "median__size_weight": {
+            "dtype": float,
+            "intent": "out",
+            "optional": False,
+            "units": "m",
+            "mapping": "node",
+            "doc": "The median grain size in each node based on grain size weight",
+        },
+        "fraction_sizes": {
+            "dtype": float,
+            "intent": "out",
+            "optional": False,
+            "units": "m",
+            "mapping": "node",
+            "doc": "The size of grain fractions",
+        },
+
+        "bedrock__elevation": {
+            "dtype": float,
+            "intent": "out",
+            "optional": False,
+            "units": "m",
+            "mapping": "node",
+            "doc": "Soil depth at node",
+        },
+        }
+
+
+    def __init__(self,
+                 grid,
+                 grading_name =  'p2-0-100',  # Fragmentation pattern (string. )
+                 n_size_classes = 10,         # Number of size classes
+                 alpha = 1,                   # Fragmentation rate or
+                 clast_density = 2000,        # Particles density [kg/m3]
+                 phi = 0.4,                   # Porosity [-]
+    ):
+        super(ClastGrading, self).__init__(grid)
+
+        self._grading_name = grading_name
+        self._alpha = alpha
+        self._n_sizes = n_size_classes
+        self._N = int(self._grading_name.split('-')[0][1:])
+        self._clast_density = float(clast_density)
+        self._phi = phi
+
+        # Create out fields.
+        # Note: Landlabs' init_out_field procedure will not work for the 'grain__weight' and 'fraction_sizes' fields
+        # because the shape of these fields is: n_nodes x n_grain_sizes.
+        grid.add_field("soil__depth", np.ones((grid.shape[0], grid.shape[1])), at="node", dtype=float)
+        grid.add_field('median__size_weight',np.zeros((grid.shape[0], grid.shape[1])), at='node', dtype=float)
+        grid.add_field("bedrock__elevation", np.zeros((grid.shape[0], grid.shape[1])), at="node", dtype=float)
+        grid.add_field("fraction_sizes", np.ones((grid.shape[0], grid.shape[1], self._n_sizes )), at="node", dtype=float)
+        grid.add_field("grain__weight", np.ones((grid.shape[0], grid.shape[1], self._n_sizes)), at="node", dtype=float)
+
+
+    def create_transion_mat(self,
+                            n_fragments=2,
+                            A_factor = 1,
+                            volume_precent_in_spread = 10):
+        # A matrix is this is the volume that weathered from each size fraction
+        # A matrix controls the fragmentation pattern
+        # A_factor matrix is the fragmentation factor or rate
+
+        self._A = np.zeros((self._n_sizes, self._n_sizes))
+        precents = np.array([float(s) for s in self._grading_name.split('-') if s.replace('.', '', 1).isdigit()])
+        if 'spread' in self._grading_name:
+            precents_to_add = np.ones((1, n_fragments)) * volume_precent_in_spread
+            precents = np.append(precents, precents_to_add)
+        alphas_fractios = precents / 100
+        self._A_factor = np.ones_like(self._A) * A_factor
+
+        for i in range(self._n_sizes):
+
+            if i == 0:
+                self._A[i, i] = 0
+            elif i == self._n_sizes:  ## the last cell in the matrix
+                self._A[i, i] = -(self._alpha - (
+                            self._alpha * alphas_fractios[0])
+                                 )
+            else:
+                self._A[i, i] = -(self._alpha - (
+                        self._alpha * alphas_fractios[0])
+                                 )
+                cnti = i - 1 # rows,
+                cnt = 1
+                while cnti >= 0 and cnt <= (len(alphas_fractios) - 1):
+                    self._A[cnti, i] = (self._alpha * alphas_fractios[cnt])
+                    if cnti == 0 and cnt <= (len(alphas_fractios) - 1):
+                        self._A[cnti, i] = (1 - alphas_fractios[0]) - np.sum(alphas_fractios[1:cnt])
+                        cnt += 1
+                        cnti -= 1
+                    cnt += 1
+                    cnti -= 1
+
+    def set_grading_classes(self, maxsize = None,
+                            power_of = 1 / 3,
+                            input_sizes_flag = False,
+                            meansizes =None):
+
+        # The grain-size classes could be a-priori set based on
+        # geomotery relations and known fragmentation pattern
+        # (following Cohen et al., 2010)
+
+        def lower_limit_of(maxsize):
+            lower_limit = maxsize * (1 / self._N) ** (power_of)
+            return lower_limit
+
+        upperlimits = []
+        lowerlimits = []
+        num_of_size_classes_plusone = self._n_sizes + 1
+        if input_sizes_flag:
+            self._meansizes = np.array(meansizes)
+            self._upperlims = np.array(meansizes)
+            self._lowerlims = np.insert(np.array(meansizes),0,0)
+        else:
+            for _ in range(num_of_size_classes_plusone-1):
+                upperlimits.append(maxsize)
+                maxsize = lower_limit_of(maxsize)
+                lowerlimits.append(maxsize)
+
+            self._upperlims = np.sort(upperlimits)
+            self._lowerlims = np.sort(lowerlimits)
+            self._meansizes = np.array(self._upperlims) + np.array(self._lowerlims) / 2
+
+        self._clast_volumes = (self._meansizes / 2) ** 3 * np.pi * (4 / 3)  # [L^3]
+        self.grid.at_node["fraction_sizes"] *= self._meansizes
+        self.update_sizes()
+
+    def create_dist(self,
+                    median_size = 0.05,
+                    std = None,
+                    num_of_clasts = 10000,
+                    grading_name = 'g_state0',
+                    init_val_flag = False,
+                    CV = 0.8):
+
+        n_classes = self._n_sizes
+        median_size = median_size
+        num_of_clasts = num_of_clasts
+        if std == None:
+            std = median_size * CV
+
+        lower = 0 # minimal random grainsize
+        upper = np.max(self._upperlims)
+        b = stats.truncnorm(
+            (lower - median_size) / std, (upper - median_size) / std, loc=median_size, scale=std)
+        b = b.rvs(num_of_clasts)
+        locals()[grading_name] = np.histogram(b, np.insert(self._upperlims, 0, 0))[0]
+        if init_val_flag:
+            self.g_state = np.ones(
+                (int(np.shape(self.grid)[0]), int(np.shape(self.grid)[1]), int(len(locals()[grading_name])))) * locals()[grading_name]
+            self.g_state0 = locals()[grading_name]
+            self.grid.at_node['grain__weight'] *= locals()[grading_name]
+            layer_depth = np.sum(self.g_state0) / (self._clast_density * self.grid.dx * self.grid.dx )  # meter
+            layer_depth /= (1-self._phi) # Porosity correction
+            self.grid.at_node['soil__depth'] +=  layer_depth
+            self.grid.at_node['bedrock__elevation'] = np.copy(self.grid.at_node['topographic__elevation'])
+            self.grid.at_node['topographic__elevation'] = self.grid.at_node['bedrock__elevation']  + self.grid.at_node['soil__depth']
+
+        else:
+            self.g_state_slide = locals()[grading_name]
+
+    def update_sizes(self):
+
+        grain_number = self.grid.at_node['grain__weight'] / (self._clast_volumes * self._clast_density)
+        grain_volume = grain_number * (self._clast_volumes)  # Volume
+        grain_area = grain_volume / (self._meansizes)  # Area
+
+        # Median size based on weight
+        cumsum_gs = np.cumsum(self.grid.at_node['grain__weight'], axis=1)
+        sum_gs = np.sum(self.grid.at_node['grain__weight'], axis=1)
+        self.grid.at_node['median__size_weight'][sum_gs <= 0] = 0
+        sum_gs_exp = np.expand_dims(sum_gs, -1)
+        # median_val_indx = np.argmin(
+        #     np.abs(
+        #         np.divide(
+        #             cumsum_gs,
+        #             sum_gs_exp,
+        #             out=np.zeros_like(cumsum_gs),
+        #             where=sum_gs_exp != 0) - 0.5),
+        #     axis=1
+        # )
+
+        median_val_indx = np.argmax(np.where(
+                np.divide(
+                    cumsum_gs,
+                    sum_gs_exp,
+                    out=np.zeros_like(cumsum_gs),
+                    where=sum_gs_exp != 0)>=0.5,1,0)
+            ,axis=1
+        )
+
+        self.grid.at_node['median__size_weight'] = self._meansizes[median_val_indx[:]]
+
+    def run_one_step(self, A_factor=None):
+        # Run one step of fragmentation
+        # 'update_sizes' procedure is called after
+
+        if np.any(A_factor == None):
+            A_factor = self._A_factor
+        temp_g_weight = np.moveaxis(np.dot(self._A * A_factor, np.swapaxes(
+            np.reshape(self.grid.at_node['grain__weight'], (self.grid.shape[0],
+                                                            self.grid.shape[1],
+                                                            self._n_sizes)), 1,
+            2)),
+                                    0, -1)
+        self.grid.at_node['grain__weight'] += np.reshape(temp_g_weight,
+                                                         (self.grid.shape[0] * self.grid.shape[1],
+                                                          self._n_sizes))
+        self.update_sizes()
