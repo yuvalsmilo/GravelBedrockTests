@@ -75,7 +75,7 @@ class ClastGrading(Component):
         # Create out fields.
         # Note: Landlabs' init_out_field procedure will not work for the 'grain__weight' and 'fraction_sizes' fields
         # because the shape of these fields is: n_nodes x n_grain_sizes.
-        grid.add_field("soil__depth", np.ones((grid.shape[0], grid.shape[1])), at="node", dtype=float)
+        grid.add_field("soil__depth", np.zeros((grid.shape[0], grid.shape[1])), at="node", dtype=float)
         grid.add_field('median__size_weight',np.zeros((grid.shape[0], grid.shape[1])), at='node', dtype=float)
         grid.add_field("bedrock__elevation", np.zeros((grid.shape[0], grid.shape[1])), at="node", dtype=float)
         grid.add_field("fraction_sizes", np.ones((grid.shape[0], grid.shape[1], self._n_sizes )), at="node", dtype=float)
@@ -149,7 +149,7 @@ class ClastGrading(Component):
 
             self._upperlims = np.sort(upperlimits)
             self._lowerlims = np.sort(lowerlimits)
-            self._meansizes = np.array(self._upperlims) + np.array(self._lowerlims) / 2
+            self._meansizes = ( np.array(self._upperlims) + np.array(self._lowerlims) )/ 2
 
         self._clast_volumes = (self._meansizes / 2) ** 3 * np.pi * (4 / 3)  # [L^3]
         self.grid.at_node["fraction_sizes"] *= self._meansizes
