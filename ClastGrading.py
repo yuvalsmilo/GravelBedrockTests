@@ -19,6 +19,14 @@ class ClastGrading(Component):
           "mapping":"node",
           "doc":"Soil depth at node",
       },
+        "bedrock__elevation": {
+            "dtype": float,
+            "intent": "out",
+            "optional": False,
+            "units": "m",
+            "mapping": "node",
+            "doc": "Soil depth at node",
+        },
         "grain__weight": {
             "dtype": float,
             "intent": "out",
@@ -41,17 +49,17 @@ class ClastGrading(Component):
             "optional": False,
             "units": "m",
             "mapping": "node",
-            "doc": "The size of grain fractions",
+            "doc": "The size of soil grain fractions",
         },
-
-        "bedrock__elevation": {
-            "dtype": float,
-            "intent": "out",
-            "optional": False,
-            "units": "m",
-            "mapping": "node",
-            "doc": "Soil depth at node",
-        },
+        "bed_grains__proportions":
+            {
+                "dtype": float,
+                "intent": "out",
+                "optional": True,
+                "units": "m",
+                "mapping": "node",
+                "doc": "Weight proportion of each grain size fractions in the bed",
+            },
         }
 
 
@@ -169,7 +177,7 @@ class ClastGrading(Component):
         if std == None:
             std = median_size * CV
 
-        lower = 0 # minimal random grainsize
+        lower = np.min(self._lowerlims)
         upper = np.max(self._upperlims)
         b = stats.truncnorm(
             (lower - median_size) / std, (upper - median_size) / std, loc=median_size, scale=std)
@@ -188,6 +196,9 @@ class ClastGrading(Component):
 
         else:
             self.g_state_slide = locals()[grading_name]
+            self.grid.add_field("bed_grains__proportions", np.ones((self.grid.shape[0], self.grid.shape[1], self._n_sizes)), at="node",
+                           dtype=float)
+            self.grid.at_node["bed_grains__proportions"] *= np.divide(self.g_state_slide,np.sum(self.g_state_slide))
 
     def update_sizes(self):
 

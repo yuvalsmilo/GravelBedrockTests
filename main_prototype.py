@@ -69,7 +69,7 @@ else:
     grading.create_dist(
         median_size=init_median_grainsize_at_node,
         num_of_clasts=initial_sediment_weight_at_node,
-        init_val_flag=True, )
+        init_val_flag=False, )
 
 
 
