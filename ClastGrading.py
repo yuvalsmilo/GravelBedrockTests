@@ -7,10 +7,48 @@ from landlab.grid.nodestatus import NodeStatus
 
 
 class ClastGrading(Component):
+    """Simulate fragmentation of soil grains through time .
+
+        Landlab component that simulates soil grading based on mARM (Cohen et al.,
+        2010) approach. 
+
+        The fragmentation process is controlled by weathering transition matrix which defines 
+        the relative mass change in each soil grain size class (grading class) as a result of the fracturing 
+        of particles in the weathering mechanism.
+
+        The primary method of this class is :func:`run_one_step`.
+
+        References
+        ----------
+        **Required Software Citation(s) Specific to this Component**
+
+        Adams, J., Gasparini, N., Hobley, D., Tucker, G., Hutton, E., Nudurupati,
+        S., Istanbulluoglu, E. (2017). The Landlab v1. 0 OverlandFlow component:
+        a Python tool for computing shallow-water flow across watersheds.
+        Geoscientific Model Development  10(4), 1645.
+        https://dx.doi.org/10.5194/gmd-10-1645-2017
+
+        **Additional References**
+
+        de Almeida, G., Bates, P., Freer, J., Souvignet, M. (2012). Improving the
+        stability of a simple formulation of the shallow water equations for 2-D
+        flood modeling. Water Resources Research 48(5)
+        https://dx.doi.org/10.1029/2011wr011570
+
+        """
+
 
     _name = 'ClastGrading'
     _unit_agnostic = True
     _info = {
+        "topographic__elevation": {
+            "dtype": float,
+            "intent": "inout",
+            "optional": False,
+            "units": "m",
+            "mapping": "node",
+            "doc": "Topographic elevation at node",
+        },
         "soil__depth":{
           "dtype":float,
           "intent":"out",
@@ -25,7 +63,7 @@ class ClastGrading(Component):
             "optional": False,
             "units": "m",
             "mapping": "node",
-            "doc": "Soil depth at node",
+            "doc": "Bedrock elevation at node",
         },
         "grain__weight": {
             "dtype": float,
@@ -65,9 +103,9 @@ class ClastGrading(Component):
 
     def __init__(self,
                  grid,
-                 grading_name =  'p2-0-100',  # Fragmentation pattern (string. )
+                 grading_name =  'p2-0-100',  # Fragmentation pattern (string)
                  n_size_classes = 10,         # Number of size classes
-                 alpha = 1,                   # Fragmentation rate or
+                 alpha = 1,                   # Fragmentation rate
                  clast_density = 2000,        # Particles density [kg/m3]
                  phi = 0.4,                   # Porosity [-]
     ):
@@ -90,13 +128,14 @@ class ClastGrading(Component):
         grid.add_field("grain__weight", np.ones((grid.shape[0], grid.shape[1], self._n_sizes)), at="node", dtype=float)
 
 
-    def create_transion_mat(self,
+    def create_transition_mat(self,
                             n_fragments=2,
                             A_factor = 1,
                             volume_precent_in_spread = 10):
-        # A matrix is this is the volume that weathered from each size fraction
+
+        # A matrix is this is the volume/weight that weathered from each size fraction in each step
         # A matrix controls the fragmentation pattern
-        # A_factor matrix is the fragmentation factor or rate
+        # A_factor matrix is the fragmentation factor / rate
 
         self._A = np.zeros((self._n_sizes, self._n_sizes))
         precents = np.array([float(s) for s in self._grading_name.split('-') if s.replace('.', '', 1).isdigit()])
@@ -110,7 +149,7 @@ class ClastGrading(Component):
 
             if i == 0:
                 self._A[i, i] = 0
-            elif i == self._n_sizes:  ## the last cell in the matrix
+            elif i == self._n_sizes:
                 self._A[i, i] = -(self._alpha - (
                             self._alpha * alphas_fractios[0])
                                  )
@@ -204,29 +243,19 @@ class ClastGrading(Component):
 
         grain_number = self.grid.at_node['grain__weight'] / (self._clast_volumes * self._clast_density)
         grain_volume = grain_number * (self._clast_volumes)  # Volume
-        grain_area = grain_volume / (self._meansizes)  # Area
 
         # Median size based on weight
         cumsum_gs = np.cumsum(self.grid.at_node['grain__weight'], axis=1)
         sum_gs = np.sum(self.grid.at_node['grain__weight'], axis=1)
         self.grid.at_node['median__size_weight'][sum_gs <= 0] = 0
         sum_gs_exp = np.expand_dims(sum_gs, -1)
-        # median_val_indx = np.argmin(
-        #     np.abs(
-        #         np.divide(
-        #             cumsum_gs,
-        #             sum_gs_exp,
-        #             out=np.zeros_like(cumsum_gs),
-        #             where=sum_gs_exp != 0) - 0.5),
-        #     axis=1
-        # )
 
         median_val_indx = np.argmax(np.where(
                 np.divide(
                     cumsum_gs,
                     sum_gs_exp,
                     out=np.zeros_like(cumsum_gs),
-                    where=sum_gs_exp != 0)>=0.5,1,0)
+                    where=sum_gs_exp != 0)>=0.5, 1, 0)
             ,axis=1
         )
 
