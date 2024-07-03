@@ -316,7 +316,7 @@ class GravelBedrockEroder(Component):
         super().__init__(grid)
 
         # Parameters
-        self._trans_coef = transport_coefficient
+        self._trans_coef = transport_coefficient # Yuval - add grain size depended relation
         self._intermittency_factor = intermittency_factor
         self._porosity_factor = 1.0 / (1.0 - sediment_porosity)
         self._depth_decay_scale = depth_decay_scale
@@ -493,7 +493,7 @@ class GravelBedrockEroder(Component):
         nonzero_slope = self._slope > 0.0
         depth[nonzero_slope] = (
             depth_factor * grain_diameter / self._slope[nonzero_slope]
-        )
+        ) ## Grain_diameter == d50. self._grid.at_node['median_size__weight'][nonzero_slope]
         return depth
 
     def calc_implied_width(self, grain_diameter=0.01, time_unit="y"):
@@ -544,7 +544,7 @@ class GravelBedrockEroder(Component):
             * self._discharge
             * self._slope ** (7.0 / 6.0)
             / (grain_diameter**1.5)
-        )
+        )  ## Grain_diameter == d50. self._grid.at_node['median_size__weight']
         return width
 
     def calc_sediment_fractions(self):
@@ -558,6 +558,7 @@ class GravelBedrockEroder(Component):
                 self._thickness_by_class[i, :], self._sed, where=self._sed > 0.0
             )
         assert np.all(self._sed >= 0.0)  # temp test, to be removed
+        ## all 1.
 
     def calc_rock_exposure_fraction(self):
         """Update the bedrock exposure fraction.
@@ -619,7 +620,7 @@ class GravelBedrockEroder(Component):
             * self._discharge
             * self._slope**_SEVEN_SIXTHS
             * (1.0 - self._rock_exposure_fraction)
-        )
+        ) ## Yuval: trans_coef should be depends on grain size
         if self._num_sed_classes > 1:
             self.calc_sediment_fractions()
             for i in range(self._num_sed_classes):
