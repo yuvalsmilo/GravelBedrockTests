@@ -298,6 +298,12 @@ class GravelBedrockEroder(Component):
         bedrock_abrasion_coefficient=0.01,
         coarse_fractions_from_plucking=1.0,
         rock_abrasion_index=0,
+        alpha = -0.68,
+        beta = 0.086,
+        epsilon = 0.2, # from parker 1978
+        w_density = 1000,
+        s_density = 2650,
+        transport_rate_coeff = 3.97
     ):
         """Initialize GravelBedrockEroder."""
 
@@ -328,6 +334,7 @@ class GravelBedrockEroder(Component):
         self._plucking_coef = plucking_coefficient
         self._rock_abrasion_index = rock_abrasion_index
         self._br_abrasion_coef = bedrock_abrasion_coefficient
+
 
         # Handle sediment classes, abrasion coefficients, and plucking fractions
         # if abrasion_coefficient is not None:
@@ -425,6 +432,23 @@ class GravelBedrockEroder(Component):
         self._abr_coefs = np.array(abrasion_coefficients)
         self._br_abr_coef = np.array(bedrock_abrasion_coefficient)
         self._pluck_coarse_frac = coarse_fractions_from_plucking
+
+
+        ## Vannessa and Yuval changes:
+        self._zeros_at_node_for_fractions = np.zeros(
+            (np.size(self._grid.nodes.flatten()), np.shape(self._grid.at_node['grains__weight'])[1]))
+        self._bedload_sediment__volume_influx_per_size = np.copy(self._zeros_at_node_for_fractions)
+        self._bedload_sediment__volume_outflux_per_size = np.copy(self._zeros_at_node_for_fractions)
+        self._tau_star_c = np.copy(self._zeros_at_node_for_fractions)
+        self._alpha = alpha
+        self._beta = beta
+        self._sediment_transport_rate_coeff = transport_rate_coeff
+        self._epsilon = epsilon # from parker 1978
+        self._w_density = w_density
+        self._s_density  = s_density
+        self._kQs = np.copy(self._zeros_at_node_for_fractions)
+        self._calc_tau_star_c()
+        self._calc_sed_transport_coeff()
 
     def _setup_length_of_flow_link(self):
         """Set up a float or array containing length of the flow link from
@@ -621,6 +645,22 @@ class GravelBedrockEroder(Component):
             * self._slope**_SEVEN_SIXTHS
             * (1.0 - self._rock_exposure_fraction)
         ) ## Yuval: trans_coef should be depends on grain size
+        self._bedload_sediment__volume_outflux_per_size
+
+
+        self._bedload_sediment__volume_outflux_per_size[:] = (
+                self._kQs
+                * self._intermittency_factor
+                * self._discharge[:, np.newaxis]
+                * self._slope[:, np.newaxis] ** _SEVEN_SIXTHS
+                * (1.0 - self._rock_exposure_fraction[:, np.newaxis])
+        ) ## Yuval: trans_coef should be depends on grain size
+
+
+
+
+
+
         if self._num_sed_classes > 1:
             self.calc_sediment_fractions()
             for i in range(self._num_sed_classes):
@@ -1090,6 +1130,31 @@ class GravelBedrockEroder(Component):
                 min_time_to_flatten_slope = upper_limit_dt
             min_dt = 0.5 * min(min_time_to_exhaust_sed, min_time_to_flatten_slope)
         return min_dt
+
+    def _calc_tau_star_c(self):
+        alpha = self._alpha
+        beta = self._beta
+        fractions_sizes = self._grid.at_node['grains_fractions__size']
+        median_size_at_node = self._grid.at_node['median_size__weight']
+        tau_star_c = self._tau_star_c
+        tau_star_c[:] = beta * np.divide(fractions_sizes, median_size_at_node[:,np.newaxis])**alpha
+
+    def _calc_sed_transport_coeff(self):
+        tr_coeff = self._sediment_transport_rate_coeff # From Wong and Parker 2006 (they call it phi).
+        epsilon = self._epsilon
+        w_density = self._w_density
+        s_density = self._s_density
+        tau_star_c = self._tau_star_c
+        kQs = self._kQs
+
+        SG = np.divide(s_density - w_density, w_density)**_SEVEN_SIXTHS
+        kQs[:] = np.divide(0.17 * tr_coeff * epsilon**(3/2),
+                           SG * (1+epsilon)**(5/3) * tau_star_c**(1/6))
+
+
+
+
+
 
     def run_one_step(self, global_dt):
         """Advance solution by time interval global_dt, subdividing

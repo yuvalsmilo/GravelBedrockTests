@@ -256,7 +256,7 @@ class SoilGrading(Component):
         if "topographic__elevation" not in grid.at_node:
             grid.add_field(
                 "topographic__elevation",
-                np.zeros_like(self._grid.nodes.flatten()),
+                np.zeros_like(self._grid.nodes.flatten(),dtype=float),
                 at="node",
                 dtype=float,
             )
@@ -264,7 +264,7 @@ class SoilGrading(Component):
         if "bedrock__elevation" not in grid.at_node:
             grid.add_field(
                 "bedrock__elevation",
-                np.zeros_like(self._grid.nodes.flatten()),
+                np.zeros_like(self._grid.nodes.flatten(),dtype=float),
                 at="node",
                 dtype=float,
             )

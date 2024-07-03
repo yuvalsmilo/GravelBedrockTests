@@ -3,7 +3,7 @@
 from landlab import RasterModelGrid
 from gravel_bedrock_eroder.gravel_bedrock_eroder import GravelBedrockEroder
 from landlab.components import FlowAccumulator
-from ClastGrading import ClastGrading
+from soil_grading import SoilGrading
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -26,7 +26,7 @@ initial_sediment_weight_at_node = 100000    # [kg]
 grading_name = 'p2-0-100'  # ,'p2-10-10-spread'  #,'p2-0-100'
 
 
-grid = RasterModelGrid((3, 3), xy_spacing=1000.0)
+grid = RasterModelGrid((3, 3), xy_spacing=30.0)
 elev = grid.add_zeros("topographic__elevation", at="node")
 
 
@@ -36,40 +36,47 @@ if known_dist_flag:
     n_size_classes = np.size(mean_grainsize_per_class )
     A_factor = 0.001
 else:
-    init_median_grainsize_at_node = 0.1           # [m]
-    n_size_classes = 30
-    maxsize = 2
+    init_median_grainsize_at_node = 0.3         # [m]
+    n_size_classes = 5
+    maxsize = 0.5
     A_factor = 0.01
 
-grading = ClastGrading(
-    grid,
-    grading_name=grading_name,
-    n_size_classes=n_size_classes,
-    clast_density=soil_density,
-    phi=porosity,
+# grading = SoilGrading(
+#     grid,
+#     grading_name=grading_name,
+#     n_size_classes=n_size_classes,
+#     clast_density=soil_density,
+#     phi=porosity,
+# )
+
+sg = SoilGrading(grid,
+                 initial_median_size = init_median_grainsize_at_node,
+                 grain_max_size=maxsize,
+                 n_of_grainsize_classes = n_size_classes
 )
 
-if known_dist_flag:
-    grading.set_grading_classes(input_sizes_flag=True,
-                                meansizes=mean_grainsize_per_class,
-                                )
-    grading.create_transion_mat(A_factor=A_factor)
-    # Create grain size distribution for initial debris layer
-    grading.create_dist(
-        median_size=init_median_grainsize_at_node,
-        num_of_clasts=initial_sediment_weight_at_node,
-        init_val_flag=True,
-    std=1)
-
-else:
-
-    grading.set_grading_classes(maxsize = maxsize)
-    grading.create_transion_mat(A_factor=A_factor)
-    # Create grain size distribution for initial debris layer
-    grading.create_dist(
-        median_size=init_median_grainsize_at_node,
-        num_of_clasts=initial_sediment_weight_at_node,
-        init_val_flag=True, )
+#
+# if known_dist_flag:
+#     grading.set_grading_classes(input_sizes_flag=True,
+#                                 meansizes=mean_grainsize_per_class,
+#                                 )
+#     grading.create_transion_mat(A_factor=A_factor)
+#     # Create grain size distribution for initial debris layer
+#     grading.create_dist(
+#         median_size=init_median_grainsize_at_node,
+#         num_of_clasts=initial_sediment_weight_at_node,
+#         init_val_flag=True,
+#     std=1)
+#
+# else:
+#
+#     grading.set_grading_classes(maxsize = maxsize)
+#     grading.create_transion_mat(A_factor=A_factor)
+#     # Create grain size distribution for initial debris layer
+#     grading.create_dist(
+#         median_size=init_median_grainsize_at_node,
+#         num_of_clasts=initial_sediment_weight_at_node,
+#         init_val_flag=True, )
 
 
 
@@ -84,7 +91,7 @@ grid.status_at_node[5] = grid.BC_NODE_IS_FIXED_VALUE
 
 
 # save inital weight per grain size
-init_weight_per_grainsize = np.copy(grid.at_node['grain__weight'][3,:])
+init_weight_per_grainsize = np.copy(grid.at_node['grains__weight'][3,:])
 
 # MAIN LOOP
 n_steps = 500
