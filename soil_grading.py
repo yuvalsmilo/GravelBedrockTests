@@ -501,7 +501,7 @@ class SoilGrading(Component):
             axis=1,
         )
 
-        self._grid.at_node["median_size__weight"][:] = self._meansizes[median_val_indx[:]]
+        self._grid.at_node["median_size__weight"][self._grid.core_nodes] = self._meansizes[median_val_indx[self._grid.core_nodes]]
 
     def run_one_step(self, A_factor=None):
         # Run one step of fragmentation

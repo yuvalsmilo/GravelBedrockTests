@@ -303,7 +303,9 @@ class GravelBedrockEroder(Component):
         epsilon = 0.2, # from parker 1978
         w_density = 1000,
         s_density = 2650,
-        transport_rate_coeff = 3.97
+        transport_rate_coeff = 3.97,
+        g = 9.82,
+        mannings_n = 0.04,
     ):
         """Initialize GravelBedrockEroder."""
 
@@ -435,6 +437,8 @@ class GravelBedrockEroder(Component):
 
 
         ## Vannessa and Yuval changes:
+        self._g = g
+        self._mannings_n = mannings_n
         self._zeros_at_node_for_fractions = np.zeros(
             (np.size(self._grid.nodes.flatten()), np.shape(self._grid.at_node['grains__weight'])[1]))
         self._bedload_sediment__volume_influx_per_size = np.copy(self._zeros_at_node_for_fractions)
@@ -446,6 +450,9 @@ class GravelBedrockEroder(Component):
         self._epsilon = epsilon # from parker 1978
         self._w_density = w_density
         self._s_density  = s_density
+        w_density = self._w_density
+        s_density = self._s_density
+        self._SG = np.divide(s_density - w_density, w_density) ** _SEVEN_SIXTHS
         self._kQs = np.copy(self._zeros_at_node_for_fractions)
         self._calc_tau_star_c()
         self._calc_sed_transport_coeff()
@@ -584,6 +591,18 @@ class GravelBedrockEroder(Component):
         assert np.all(self._sed >= 0.0)  # temp test, to be removed
         ## all 1.
 
+        # Susannah and Yuval:
+        sediment_weight_per_size_class = self.grid.at_node['grains__weight']
+        total_sediment_weight_at_node = np.sum(sediment_weight_per_size_class,axis=1)[:, np.newaxis]
+        # Below -- need to transpose ... annoying.
+        self._sediment_fraction[:] = np.divide(sediment_weight_per_size_class,
+                                               total_sediment_weight_at_node,
+                                            where=total_sediment_weight_at_node > 10**-10,
+                                            out=np.zeros_like(sediment_weight_per_size_class)).T
+
+
+
+
     def calc_rock_exposure_fraction(self):
         """Update the bedrock exposure fraction.
 
@@ -638,28 +657,15 @@ class GravelBedrockEroder(Component):
         >>> round(eroder._sediment_outflux[4], 4)
         0.019
         """
+
         self._sediment_outflux[:] = (
             self._trans_coef
             * self._intermittency_factor
             * self._discharge
             * self._slope**_SEVEN_SIXTHS
             * (1.0 - self._rock_exposure_fraction)
-        ) ## Yuval: trans_coef should be depends on grain size
+        )
         self._bedload_sediment__volume_outflux_per_size
-
-
-        self._bedload_sediment__volume_outflux_per_size[:] = (
-                self._kQs
-                * self._intermittency_factor
-                * self._discharge[:, np.newaxis]
-                * self._slope[:, np.newaxis] ** _SEVEN_SIXTHS
-                * (1.0 - self._rock_exposure_fraction[:, np.newaxis])
-        ) ## Yuval: trans_coef should be depends on grain size
-
-
-
-
-
 
         if self._num_sed_classes > 1:
             self.calc_sediment_fractions()
@@ -667,6 +673,49 @@ class GravelBedrockEroder(Component):
                 self._sed_outfluxes[i, :] = (
                     self._sediment_fraction[i, :] * self._sediment_outflux
                 )
+
+
+        ## Susaanah and Yuval
+        self._bedload_sediment__volume_outflux_per_size[:] = (
+                self._kQs
+                * self._intermittency_factor
+                * self._discharge[:, np.newaxis]
+                * self._slope[:, np.newaxis] ** _SEVEN_SIXTHS
+                * (1.0 - self._rock_exposure_fraction[:, np.newaxis])
+        )
+
+
+
+        tr_coeff = self._sediment_transport_rate_coeff
+        tau_star_c = self._tau_star_c
+        SG  =  self._SG
+        g = self._g
+        n = self._mannings_n
+        width = self.calc_implied_width()
+        median_size_at_node = self.grid.at_node['median_size__weight']
+        fractions_sizes = self._grid.at_node["grains_fractions__size"]
+        nodes = self.grid.nodes.flatten()
+        median_index = np.argmin(np.abs(np.cumsum(self._sediment_fraction,axis=0)-0.5),axis=0)
+
+
+
+        min_threshold_slope = 10**-4 #I got weird results with very low slopes
+        water_depth = self._SG * (1+self._epsilon) * self._tau_star_c[ nodes, median_index] * (np.divide(fractions_sizes[ nodes, median_index ], self._slope, where=self._slope>min_threshold_slope))
+        water_velocity = 5.9 * self._g**0.5 * np.divide( water_depth**2/3 * self._slope**0.5,
+                                                         median_size_at_node**1/6,
+                                                         where=median_size_at_node>0, out=np.zeros_like(median_size_at_node))
+
+        tau_b = self._w_density * g * water_depth * self._slope
+        tau_start_b = np.divide(
+            tau_b, (self._w_density  - self._s_density) * g *median_size_at_node)
+
+
+        excess_stress = tau_start_b[:, np.newaxis] - tau_star_c
+        above_tau_star_c = np.where(excess_stress>0)
+
+
+        sediment_outflux_per_grainsize = tr_coeff * SG**0.5 * g**0.5 * excess_stress**3/2 * median_size_at_node**3/2
+
 
     def calc_abrasion_rate(self):
         """Update the volume rate of bedload loss to abrasion, per unit area.
@@ -1135,19 +1184,18 @@ class GravelBedrockEroder(Component):
         alpha = self._alpha
         beta = self._beta
         fractions_sizes = self._grid.at_node['grains_fractions__size']
-        median_size_at_node = self._grid.at_node['median_size__weight']
+        median_size_at_node = self._grid.at_node['median_size__weight'][:,np.newaxis]
         tau_star_c = self._tau_star_c
-        tau_star_c[:] = beta * np.divide(fractions_sizes, median_size_at_node[:,np.newaxis])**alpha
+        tau_star_c[:] = np.inf
+        tau_star_c[self.grid.core_nodes] = beta * np.divide(fractions_sizes[self.grid.core_nodes,:], median_size_at_node[self.grid.core_nodes,0])**alpha
 
     def _calc_sed_transport_coeff(self):
         tr_coeff = self._sediment_transport_rate_coeff # From Wong and Parker 2006 (they call it phi).
         epsilon = self._epsilon
-        w_density = self._w_density
-        s_density = self._s_density
         tau_star_c = self._tau_star_c
         kQs = self._kQs
 
-        SG = np.divide(s_density - w_density, w_density)**_SEVEN_SIXTHS
+        SG = self._SG
         kQs[:] = np.divide(0.17 * tr_coeff * epsilon**(3/2),
                            SG * (1+epsilon)**(5/3) * tau_star_c**(1/6))
 

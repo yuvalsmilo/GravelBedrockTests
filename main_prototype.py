@@ -55,6 +55,48 @@ sg = SoilGrading(grid,
                  n_of_grainsize_classes = n_size_classes
 )
 
+
+fa = FlowAccumulator(grid, runoff_rate=1.0)
+fa.run_one_step()
+eroder = GravelBedrockEroder(
+    grid, sediment_porosity = 0.4, abrasion_coefficients = 0.0005,
+    number_of_sediment_classes  = n_size_classes)
+rock_elev = grid.at_node["bedrock__elevation"]
+grid.status_at_node[grid.perimeter_nodes] = grid.BC_NODE_IS_CLOSED
+grid.status_at_node[5] = grid.BC_NODE_IS_FIXED_VALUE
+
+
+# save inital weight per grain size
+init_weight_per_grainsize = np.copy(grid.at_node['grains__weight'][4,:])
+
+# MAIN LOOP
+n_steps = 500
+for _ in range(n_steps ):
+    rock_elev[grid.core_nodes] += 1.0
+    elev[grid.core_nodes] += 1.0
+    fa.run_one_step()
+    eroder.run_one_step(10000.0)
+    sg.run_one_step()
+
+
+# Figure
+total_weight = np.sum(grid.at_node['grains__weight'][4,:])
+fig,ax = plt.subplots(1,1)
+ax.plot(-np.log2(sg._meansizes*1000),
+        np.cumsum(init_weight_per_grainsize)/total_weight,
+        color='black',
+       label='t = 0')
+ax.plot(-np.log2(sg._meansizes*1000),np.cumsum(grid.at_node['grains__weight'][4,:])/total_weight,color='blue',label='t = ' + str(n_steps ))
+ax.set_xlabel('Grain size [$\phi$]')
+ax.set_ylabel('Weight fraction')
+ax.invert_xaxis() # phi scale
+ax.legend()
+plt.show()
+
+
+
+
+
 #
 # if known_dist_flag:
 #     grading.set_grading_classes(input_sizes_flag=True,
@@ -78,44 +120,6 @@ sg = SoilGrading(grid,
 #         num_of_clasts=initial_sediment_weight_at_node,
 #         init_val_flag=True, )
 
-
-
-fa = FlowAccumulator(grid, runoff_rate=10.0)
-fa.run_one_step()
-eroder = GravelBedrockEroder(
-    grid, sediment_porosity = 0.4, abrasion_coefficients = [0.0005]
-)
-rock_elev = grid.at_node["bedrock__elevation"]
-grid.status_at_node[grid.perimeter_nodes] = grid.BC_NODE_IS_CLOSED
-grid.status_at_node[5] = grid.BC_NODE_IS_FIXED_VALUE
-
-
-# save inital weight per grain size
-init_weight_per_grainsize = np.copy(grid.at_node['grains__weight'][3,:])
-
-# MAIN LOOP
-n_steps = 500
-for _ in range(n_steps ):
-    rock_elev[grid.core_nodes] += 1.0
-    elev[grid.core_nodes] += 1.0
-    fa.run_one_step()
-    eroder.run_one_step(10000.0)
-    grading.run_one_step()
-
-
-# Figure
-total_weight = np.sum(grid.at_node['grain__weight'][3,:])
-fig,ax = plt.subplots(1,1)
-ax.plot(-np.log2(grading._meansizes*1000),
-        np.cumsum(init_weight_per_grainsize)/total_weight,
-        color='black',
-       label='t = 0')
-ax.plot(-np.log2(grading._meansizes*1000),np.cumsum(grid.at_node['grain__weight'][3,:])/total_weight,color='blue',label='t = ' + str(n_steps ))
-ax.set_xlabel('Grain size [$\phi$]')
-ax.set_ylabel('Weight fraction')
-ax.invert_xaxis() # phi scale
-ax.legend()
-plt.show()
 
 
 
