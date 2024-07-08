@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
-use_cfuncs = True
+use_cfuncs =False
 if use_cfuncs:
     from .cfuncs import _calc_sediment_influx
     from .cfuncs import _calc_sediment_rate_of_change
@@ -452,7 +452,7 @@ class GravelBedrockEroder(Component):
         self._s_density  = s_density
         w_density = self._w_density
         s_density = self._s_density
-        self._SG = np.divide(s_density - w_density, w_density) ** _SEVEN_SIXTHS
+        self._SG = np.divide(s_density - w_density, w_density)
         self._kQs = np.copy(self._zeros_at_node_for_fractions)
         self._calc_tau_star_c()
         self._calc_sed_transport_coeff()
@@ -489,7 +489,7 @@ class GravelBedrockEroder(Component):
             / self.grid.area_of_cell[self.grid.cell_at_node[self.grid.core_nodes]]
         )
 
-    def calc_implied_depth(self, grain_diameter=0.01):
+    def calc_implied_depth(self, grain_diameter=None):
         """Utility function that calculates and returns water depth implied by
         slope and grain diameter, using Wickert & Schildgen (2019) equation 8.
 
@@ -519,12 +519,16 @@ class GravelBedrockEroder(Component):
         >>> int(water_depth[4] * 1000)
         98
         """
+        nonzero_slope = self._slope > 0.0
+        if grain_diameter is None:
+            grain_diameter = self._grid.at_node['median_size__weight'][nonzero_slope]
+        
         depth_factor = 0.09801
         depth = np.zeros(self._grid.number_of_nodes)
-        nonzero_slope = self._slope > 0.0
+
         depth[nonzero_slope] = (
             depth_factor * grain_diameter / self._slope[nonzero_slope]
-        ) ## Grain_diameter == d50. self._grid.at_node['median_size__weight'][nonzero_slope]
+        ) 
         return depth
 
     def calc_implied_width(self, grain_diameter=0.01, time_unit="y"):
@@ -698,25 +702,23 @@ class GravelBedrockEroder(Component):
         median_index = np.argmin(np.abs(np.cumsum(self._sediment_fraction,axis=0)-0.5),axis=0)
 
 
-
-        min_threshold_slope = 10**-4 #I got weird results with very low slopes
-        water_depth = self._SG * (1+self._epsilon) * self._tau_star_c[ nodes, median_index] * (np.divide(fractions_sizes[ nodes, median_index ], self._slope, where=self._slope>min_threshold_slope))
-        water_velocity = 5.9 * self._g**0.5 * np.divide( water_depth**2/3 * self._slope**0.5,
-                                                         median_size_at_node**1/6,
-                                                         where=median_size_at_node>0, out=np.zeros_like(median_size_at_node))
-
+        water_depth = self.calc_implied_depth()
         tau_b = self._w_density * g * water_depth * self._slope
         tau_start_b = np.divide(
-            tau_b, (self._w_density  - self._s_density) * g *median_size_at_node)
+            tau_b, (self._s_density-self._w_density) * g *median_size_at_node,
+        where=median_size_at_node!=0, out=np.zeros_like(median_size_at_node))
 
 
         excess_stress = tau_start_b[:, np.newaxis] - tau_star_c
         above_tau_star_c = np.where(excess_stress>0)
-
-
-        sediment_outflux_per_grainsize = tr_coeff * SG**0.5 * g**0.5 * excess_stress**3/2 * median_size_at_node**3/2
-
-
+        sediment_outflux_per_grainsize = np.zeros_like(tau_star_c)
+        
+        if np.any(above_tau_star_c):
+            sediment_outflux_per_grainsize = tr_coeff * SG**0.5 * g**0.5 * excess_stress[above_tau_star_c]**3/2 * self._grid.at_node['grains_fractions__size'][above_tau_star_c]**3/2
+        
+        self._sed_outfluxes[:] = sediment_outflux_per_grainsize.T
+        
+        
     def calc_abrasion_rate(self):
         """Update the volume rate of bedload loss to abrasion, per unit area.
 
@@ -859,15 +861,24 @@ class GravelBedrockEroder(Component):
                 self._receiver_node,
             )
         else:
-            self._sediment_influx[:] = 0.0
+            # self._sediment_influx[:] = 0.0
+            # self._sed_influxes[:, :] = 0.0
+            # for c in self.grid.core_nodes:  # send sediment downstream
+            #     r = self._receiver_node[c]
+            #     if self._num_sed_classes > 1:
+            #         self._sediment_influx[r] += self._sediment_outflux[c]
+            #     for i in range(self._num_sed_classes):
+            #         self._sed_influxes[i, r] += self._sed_outfluxes[i, c]
+            # 
+            
+            ## Susaanah & Yuval:
             self._sed_influxes[:, :] = 0.0
             for c in self.grid.core_nodes:  # send sediment downstream
                 r = self._receiver_node[c]
-                if self._num_sed_classes > 1:
-                    self._sediment_influx[r] += self._sediment_outflux[c]
                 for i in range(self._num_sed_classes):
                     self._sed_influxes[i, r] += self._sed_outfluxes[i, c]
 
+            
     def calc_sediment_rate_of_change(self):
         """
         Calculate and store time rate of change of sediment thickness
@@ -949,13 +960,24 @@ class GravelBedrockEroder(Component):
                 self._br_abrasion_coef,
             )
         else:
+            # cores = self.grid.core_nodes
+            # for i in range(self._num_sed_classes):
+            #     self._dHdt_by_class[i, cores] = self._porosity_factor * (
+            #         (self._sed_influxes[i, cores] - self._sed_outfluxes[i, cores])
+            #         / self.grid.area_of_cell[self.grid.cell_at_node[cores]]
+            #         + (self._pluck_rate[cores] * self._pluck_coarse_frac[i])
+            #         - self._sed_abr_rates[i, cores] 
+            #     )
+            # self._dHdt[:] = np.sum(self._dHdt_by_class, axis=0)
+            # 
+            
+            ## Susannah and Yuval:
             cores = self.grid.core_nodes
             for i in range(self._num_sed_classes):
                 self._dHdt_by_class[i, cores] = self._porosity_factor * (
                     (self._sed_influxes[i, cores] - self._sed_outfluxes[i, cores])
                     / self.grid.area_of_cell[self.grid.cell_at_node[cores]]
                     + (self._pluck_rate[cores] * self._pluck_coarse_frac[i])
-                    - self._sed_abr_rates[i, cores] 
                 )
             self._dHdt[:] = np.sum(self._dHdt_by_class, axis=0)
 
