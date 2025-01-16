@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
-use_cfuncs =False
+use_cfuncs =True
 if use_cfuncs:
     from .cfuncs import _calc_sediment_influx
     from .cfuncs import _calc_sediment_rate_of_change
@@ -585,10 +585,10 @@ class GravelBedrockEroder(Component):
 
         #self._implied_width.fill(0.0)
         row, col = np.where(
-            self.grid.at_node['median_size__weight'][:, np.newaxis] == self._grid.at_node['grains_fractions__size'])
+            self.grid.at_node['median_size__weight'][:, np.newaxis] == self._grid.at_node['grains_classes__size'])
         tau_star_c = np.copy(self._tau_star_c[row, col])
         tau_star_c[tau_star_c == np.inf] = 0
-        NEW_G = self._g * (365 * 24 * 60 * 60)**2
+        NEW_G = self._g * (365 * 24 * 60 * 60)**2 *self._intermittency_factor
         # self._implied_width[self.grid.core_nodes] = (0.17 * NEW_G**(-0.5)
         #      * (self._SG)**(-5 / 3)
         #      * (1 + self._epsilon)** (-5 / 3)
@@ -708,10 +708,10 @@ class GravelBedrockEroder(Component):
         #             self._sediment_fraction[i, :] * self._sediment_outflux
         #         )
         sec_in_year = 60 * 60 * 24 * 365
-        NEW_G = self._g * (sec_in_year ** 2)
+        NEW_G = self._g * (sec_in_year ** 2) * self._intermittency_factor
 
         row,col = np.where(
-            self.grid.at_node['median_size__weight'][:, np.newaxis] == self._grid.at_node['grains_fractions__size'])
+            self.grid.at_node['median_size__weight'][:, np.newaxis] == self._grid.at_node['grains_classes__size'])
         tau_star_c= np.copy(self._tau_star_c[row,col])
         tau_star_c[tau_star_c==np.inf] =0
 
@@ -721,17 +721,15 @@ class GravelBedrockEroder(Component):
                                                                                                 out=np.zeros_like(self.grid.at_node['median_size__weight'][self._grid.core_nodes]))
         self._tau = 1000 *  NEW_G * self._h * self._slope
         self._tau_star = np.divide(self._tau[:,np.newaxis],
-                                   ((1650) *  NEW_G * self._grid.at_node['grains_fractions__size']))
+                                   ((1650) *  NEW_G * self._grid.at_node['grains_classes__size']))
         excess_stress  = self._tau_star - self._tau_star_c
         excess_stress[excess_stress<0] = 0
-        #excess_stress*=90000000000
-
-        qs = 3.97 * self._SG**(0.5) * NEW_G**(0.5) * (excess_stress)**(3/2) * self._grid.at_node['grains_fractions__size']**(3/2)
+        qs = 3.97 * self._SG**(0.5) * NEW_G**(0.5) * (excess_stress)**(3/2) * self._grid.at_node['grains_classes__size']**(3/2) ## equation 3 in wickert
 
         self.calc_implied_width()
         #Qs = self._implied_width[:,np.newaxis] * qs
         Qs = self._new_width[:,np.newaxis] * qs
-        self._bedload_sediment__volume_outflux_per_size[:] = Qs
+        self._bedload_sediment__volume_outflux_per_size[:] = Qs*(1.0 - self._rock_exposure_fraction[:,np.newaxis])
 
         ## Susaanah and Yuval
         # self._bedload_sediment__volume_outflux_per_size[:] = (
@@ -768,13 +766,12 @@ class GravelBedrockEroder(Component):
         # sediment_outflux_per_grainsize = np.zeros_like(tau_star_c)
         # 
         # if np.any(above_tau_star_c):
-        #     sediment_outflux_per_grainsize = tr_coeff * SG**0.5 * g**0.5 * excess_stress[above_tau_star_c]**3/2 * self._grid.at_node['grains_fractions__size'][above_tau_star_c]**3/2
+        #     sediment_outflux_per_grainsize = tr_coeff * SG**0.5 * g**0.5 * excess_stress[above_tau_star_c]**3/2 * self._grid.at_node['grains_classes__size'][above_tau_star_c]**3/2
         #     self._kQs * self._intermittency_factor * self._di
 
         grain_weight_at_node = self._grid.at_node['grains__weight']
         grain_volume_at_node = grain_weight_at_node / (self._s_density * (1-self._sediment_porosity))
         self._bedload_sediment__volume_outflux_per_size[ self._bedload_sediment__volume_outflux_per_size>grain_volume_at_node] = grain_volume_at_node[ self._bedload_sediment__volume_outflux_per_size>grain_volume_at_node]
-        #print(np.max(self._bedload_sediment__volume_outflux_per_size))
         self._bedload_sediment__volume_outflux_per_size[grain_weight_at_node<=1000] = 0
         self._sed_outfluxes[:] = self._bedload_sediment__volume_outflux_per_size.T
         self._sediment_outflux[:] = np.sum(self._bedload_sediment__volume_outflux_per_size.T,axis=0)
@@ -1016,6 +1013,12 @@ class GravelBedrockEroder(Component):
         >>> np.round(eroder._dHdt_by_class[0, 5:7], 8)
         array([ -2.93000000e-06,  -2.93000000e-06])
         """
+
+        cores = self.grid.core_nodes
+        self._pluck_coarse_frac_per_size = np.zeros_like(self._dHdt_by_class)
+        self._pluck_coarse_frac_per_size[0:2, 0:int(np.shape(self._dHdt_by_class)[1] / 2)] = 1
+        self._pluck_coarse_frac_per_size[3:, int(np.shape(self._dHdt_by_class)[1] / 2):] = 1
+
         if use_cfuncs:
             _calc_sediment_rate_of_change(
                 self._num_sed_classes,
@@ -1045,12 +1048,17 @@ class GravelBedrockEroder(Component):
             # 
             
             ## Susannah and Yuval:
-            cores = self.grid.core_nodes
+
             for i in range(self._num_sed_classes):
+                # self._dHdt_by_class[i, cores] = self._porosity_factor * (
+                #     (self._sed_influxes[i, cores] - self._sed_outfluxes[i, cores])
+                #     / self.grid.area_of_cell[self.grid.cell_at_node[cores]]
+                #     + (self._pluck_rate[cores] * self._pluck_coarse_frac[i])
+                # )
                 self._dHdt_by_class[i, cores] = self._porosity_factor * (
-                    (self._sed_influxes[i, cores] - self._sed_outfluxes[i, cores])
-                    / self.grid.area_of_cell[self.grid.cell_at_node[cores]]
-                    + (self._pluck_rate[cores] * self._pluck_coarse_frac[i])
+                        (self._sed_influxes[i, cores] - self._sed_outfluxes[i, cores])
+                        / self.grid.area_of_cell[self.grid.cell_at_node[cores]]
+                        + (self._pluck_rate[cores] * self._pluck_coarse_frac_per_size[i,cores])
                 )
             self._dHdt[:] = np.sum(self._dHdt_by_class, axis=0)
 
@@ -1215,7 +1223,7 @@ class GravelBedrockEroder(Component):
         if np.amax(self._br_abr_coef) > 0.0:
             self.calc_bedrock_abrasion_rate()
         self.calc_sediment_rate_of_change()
-        self._rock_lowering_rate[:] = self._pluck_rate + self._rock_abrasion_rate
+        self._rock_lowering_rate[self.grid.core_nodes]= self._pluck_rate[self.grid.core_nodes] + self._rock_abrasion_rate[self.grid.core_nodes]
 
     def _update_rock_sed_and_elev(self, dt):
         """Update rock elevation, sediment thickness, and elevation
@@ -1230,7 +1238,6 @@ class GravelBedrockEroder(Component):
         # grain__weight field need to be transposed
         weights_at_node  = self._grid.at_node['grains__weight'].T
         weight_dt_by_class = self._dHdt_by_class * self._s_density * self._grid.dx**2 * (1-self._sediment_porosity) * dt
-        print(np.max(self._dHdt_by_class))
         weights_at_node += weight_dt_by_class
         weights_at_node[weights_at_node<=0] = 0
 
@@ -1239,6 +1246,7 @@ class GravelBedrockEroder(Component):
         self._sed[self.grid.core_nodes] = np.sum(self._grid.at_node['grains__weight'][self.grid.core_nodes], axis=1) / (
                     self._s_density * self._grid.dx**2 * (1 - self._sediment_porosity))
         self._bedrock__elevation[self.grid.core_nodes] -= self._rock_lowering_rate[self.grid.core_nodes] * dt
+        self._bedrock__elevation[self._bedrock__elevation<0]=0
         self._elev[self.grid.core_nodes] = self._bedrock__elevation[self.grid.core_nodes] + self._sed[self.grid.core_nodes]
 
     def _estimate_max_time_step_size(self, upper_limit_dt=1.0e6):
@@ -1330,7 +1338,7 @@ class GravelBedrockEroder(Component):
         
         alpha = self._alpha
         beta = self._beta
-        fractions_sizes = self._grid.at_node['grains_fractions__size']
+        fractions_sizes = self._grid.at_node['grains_classes__size']
         median_size_at_node = self._grid.at_node['median_size__weight'][:,np.newaxis]
         tau_star_c = self._tau_star_c
         tau_star_c[:] = np.inf

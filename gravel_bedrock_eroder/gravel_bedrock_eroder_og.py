@@ -11,7 +11,7 @@ from landlab import Component
 from landlab import HexModelGrid
 from landlab.grid.diagonals import DiagonalsMixIn
 
-use_cfuncs = True
+use_cfuncs = False
 if use_cfuncs:
     from .cfuncs import _calc_sediment_influx
     from .cfuncs import _calc_sediment_rate_of_change
@@ -291,6 +291,7 @@ class GravelBedrockEroder(Component):
         abrasion_coefficients=0.0,
         coarse_fractions_from_plucking=1.0,
         rock_abrasion_index=0,
+        bedrock_abrasion_coefficient=0.01
     ):
         """Initialize GravelBedrockEroder."""
 
@@ -320,6 +321,7 @@ class GravelBedrockEroder(Component):
             plucking_coefficient = plucking_coefficient[self.grid.core_nodes]
         self._plucking_coef = plucking_coefficient
         self._rock_abrasion_index = rock_abrasion_index
+        self._br_abrasion_coef = bedrock_abrasion_coefficient
 
         # Handle sediment classes, abrasion coefficients, and plucking fractions
         # if abrasion_coefficient is not None:
@@ -839,6 +841,7 @@ class GravelBedrockEroder(Component):
                 self._sed_influxes,
                 self._sed_outfluxes,
                 self._sed_abr_rates,
+                np.array(self._br_abrasion_coef),
             )
         else:
             cores = self.grid.core_nodes

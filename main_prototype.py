@@ -6,6 +6,10 @@ from landlab.components import FlowAccumulator
 from soil_grading import SoilGrading
 from matplotlib import pyplot as plt
 import numpy as np
+from landlab import imshow_grid
+import noise
+from landlab.components import PriorityFloodFlowRouter
+from landlab.components import LinearDiffuser
 
 """ Create grading features with different fragmentation models. 
 Fragmentation models are describe by the following string:
@@ -25,8 +29,9 @@ soil_density = 2650                         # [kg/m^3]
 initial_sediment_weight_at_node = 100000    # [kg]
 grading_name = 'p2-0-100'  # ,'p2-10-10-spread'  #,'p2-0-100'
 
-xy_spacing=50
-grid = RasterModelGrid((50, 3), xy_spacing=xy_spacing)
+xy_spacing=500
+#grid = RasterModelGrid((200, 3), xy_spacing=xy_spacing)
+grid = RasterModelGrid((50, 50), xy_spacing=xy_spacing)
 elev = grid.add_zeros("topographic__elevation", at="node")
 
 if known_dist_flag:
@@ -35,71 +40,113 @@ if known_dist_flag:
     n_size_classes = np.size(mean_grainsize_per_class )
     A_factor = 0.001
 else:
-    init_median_grainsize_at_node = 0.01        # [m]
-    n_size_classes = 5
+    init_median_grainsize_at_node = 0.01   # [m]
+    n_size_classes = 2
     maxsize = init_median_grainsize_at_node+(init_median_grainsize_at_node*2)
-    A_factor = 0.01
+    A_factor = 0.001
 
-# grading = SoilGrading(
-#     grid,
-#     grading_name=grading_name,
-#     n_size_classes=n_size_classes,
-#     clast_density=soil_density,
-#     phi=porosity,
+# sg = SoilGrading(grid,
+#                  initial_median_size = init_median_grainsize_at_node,
+#                  grain_max_size=maxsize,
+#                  n_of_grainsize_classes = n_size_classes, phi = porosity,
+# initial_total_soil_weight = 2650*1000000
 # )
 
 sg = SoilGrading(grid,
-                 initial_median_size = init_median_grainsize_at_node,
-                 grain_max_size=maxsize,
-                 n_of_grainsize_classes = n_size_classes, phi = porosity,
-initial_total_soil_weight = 2650*0.010
-)
+                        meansizes=[0.005, 0.01, 0.05],
+                        grains_weight=[2650*1000000*0.3, 2650*1000000*0.3, 2650*1000000*0.3],
+                        phi=porosity)
+
+# #10-20
+# fa = PriorityFloodFlowRouter(
+#     grid,
+#     flow_metric="D8",
+#     separate_hill_flow=True,
+#     hill_flow_metric="Quinn",
+#     update_hill_flow_instantaneous=True, depression_handler='fill',
+#     runoff_rate=1
+# )
 
 
 fa = FlowAccumulator(grid, runoff_rate=1)
+
 fa.run_one_step()
 eroder = GravelBedrockEroder(
     grid, sediment_porosity = porosity, abrasion_coefficients = 0.0005,
-    number_of_sediment_classes  = n_size_classes,
-    plucking_coefficient= 10**-5)#    plucking_coefficient= 10**-3
+    number_of_sediment_classes  = 3,
+    plucking_coefficient= 10**-7,
+    depth_decay_scale=0.5)#    plucking_coefficient= 10**-3
+
+diffuser = LinearDiffuser(grid, linear_diffusivity=0.001)
+
+# eroder = GravelBedrockEroder(
+#     grid,
+#     plucking_coefficient= 10**-2,
+#     depth_decay_scale=0.5)#    plucking_coefficient= 10**-3
 
 
 rock_elev = grid.at_node["bedrock__elevation"]
 rock_elev[:] +=100
-rock_elev[grid.nodes[:,1]] += grid.node_y[grid.nodes[:,1]]*(0.1)
+#rock_elev[grid.nodes[:,1]] += grid.node_y[grid.nodes[:,1]]*(0.001)
 elev[:] = rock_elev[:] + grid.at_node['soil__depth']
-grid.status_at_node[grid.perimeter_nodes] = grid.BC_NODE_IS_CLOSED
-grid.status_at_node[5] = grid.BC_NODE_IS_FIXED_VALUE
+# grid.status_at_node[grid.perimeter_nodes] = grid.BC_NODE_IS_CLOSED
+# grid.status_at_node[5] = grid.BC_NODE_IS_FIXED_VALUE
 
+
+grid.set_closed_boundaries_at_grid_edges(False, False, False, False)
+
+noise_mat = np.zeros_like(grid.at_node['soil__depth'][grid.nodes])
+scale = 200
+octaves = 20
+persistence = 0.5
+lacunarity =55
+
+for i in range(np.shape(noise_mat)[0]):
+    for j in range(np.shape(noise_mat)[1]):
+        noise_mat[i][j] = noise.pnoise2(i / scale,
+                                        j / scale,
+                                        octaves=octaves,
+                                        persistence=persistence,
+                                        lacunarity=lacunarity,
+                                        repeatx=np.shape(noise_mat)[1],
+                                        repeaty=np.shape(noise_mat)[0],
+                                        base=2
+                                        )
+
+rock_elev[:] += np.abs(noise_mat[:].flatten())
+
+# rock_elev[:] += np.random.rand(np.shape(rock_elev)[0])
+elev[:] = rock_elev[:] + grid.at_node['soil__depth']
 
 # save inital weight per grain size
-init_weight_per_grainsize = np.copy(grid.at_node['grains__weight'][4,:])
+#init_weight_per_grainsize = np.copy(grid.at_node['grains__weight'][4,:])
 
 # MAIN LOOP
 n_steps = 1050000
 fig_cnt = 0
 xvec  = np.arange(0, np.size(grid.at_node['topographic__elevation'][grid.core_nodes]))*grid.dx
 for i,_ in enumerate(range(n_steps )):
-    rock_elev[grid.core_nodes] += 0.0001
-    elev[grid.core_nodes] =rock_elev[grid.core_nodes]+ grid.at_node['soil__depth'][grid.core_nodes]
+    rock_elev[grid.core_nodes] += 0.001
+    elev[grid.core_nodes] =rock_elev[grid.core_nodes] + grid.at_node['soil__depth'][grid.core_nodes]
     fa.run_one_step()
     eroder.run_one_step(1)
-    # if i>= fig_cnt:
-    #     fig, ax = plt.subplots()
-    #     ax.plot(xvec, grid.at_node['topographic__elevation'][grid.core_nodes], color='black')
-    #     ax.plot(xvec, grid.at_node['bedrock__elevation'][grid.core_nodes], color='blue')
-    #     ax2 = ax.twinx()
-    #     ax2.plot(xvec, grid.at_node['median_size__weight'][grid.core_nodes], color='salmon')
-    #     ax.set_xlabel('Distnace upstream')
-    #     ax.set_ylabel('Elevation [m]')
-    #     ax2.set_ylabel('Grainsize [m]')
-    #     plt.title(f'time step = {i}')
-    #     #ax.axis('equal')
-    #     ax.set_ylim([0,150])
-    #     plt.tight_layout()
-    #     plt.show()
-    #     fig_cnt+=500
-    sg.update_median__size()
+    diffuser.run_one_step(1)
+    if i>= fig_cnt:
+        fig, ax = plt.subplots()
+        ax.plot(xvec, grid.at_node['topographic__elevation'][grid.core_nodes], color='black')
+        ax.plot(xvec, grid.at_node['bedrock__elevation'][grid.core_nodes], color='blue')
+        ax2 = ax.twinx()
+        ax2.plot(xvec, grid.at_node['median_size__weight'][grid.core_nodes], color='salmon')
+        ax.set_xlabel('Distnace upstream')
+        ax.set_ylabel('Elevation [m]')
+        ax2.set_ylabel('Grainsize [m]')
+        plt.title(f'time step = {i}')
+        #ax.axis('equal')
+        ax.set_ylim([0,np.max(grid.at_node['topographic__elevation'])+100])
+        plt.tight_layout()
+        plt.show()
+        fig_cnt+=5500
+    sg.update_median_grain_size()
 
 fig, ax = plt.subplots()
 ax.plot(xvec, grid.at_node['topographic__elevation'][grid.core_nodes], color='black')
